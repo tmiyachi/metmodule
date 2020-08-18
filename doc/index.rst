@@ -11,6 +11,7 @@ Welcome to metmodule's documentation!
    :caption: Contents:
 
    constants
+   thermodynamics
 
 
 Indices and tables
