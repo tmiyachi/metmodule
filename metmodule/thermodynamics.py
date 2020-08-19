@@ -1,5 +1,6 @@
 """
 熱力学関連計算モジュール
+------------------------
 
 .. autosummary::
 
@@ -7,7 +8,8 @@
     vapor_pressure
     saturation_vapor_pressure
     mixing_ratio
-    dewpoint
+    dewpoint_from_e
+    dewpoint_from_rh
     wetbulb
     dry_lapse
     moist_lapse
@@ -15,7 +17,7 @@
 import numpy as np
 from scipy.integrate import odeint
 
-from constants import kappa, epsilon, water_es_0cm air_Rd, water_Lv, air_Cp_d
+from constants import kappa, epsilon, water_es_0c, air_Rd, water_Lv_0c, air_Cp_d
 
 
 def potential_temperature(p, t, base_p=1.e5):
@@ -90,9 +92,9 @@ def saturation_vapor_pressure(t):
     -----
     計算式:
 
-    .. math:: e_s = e_0 \exp\left[ \frac{17.67 (T - 273.15) }{T - 29.65} \right] ~~ (T \le 0)
+    .. math:: e_s = e_0 \exp\left[ \frac{17.67 T[deg] }{T[deg] + 243.5} \right] ~~ (T \le 0)
 
-    .. math:: e_s = e_0 \exp\left[ \frac{22.46 (T - 273.15) }{T - 0.53} \right] ~~ (T < 0)
+    .. math:: e_s = e_0 \exp\left[ \frac{22.46 T[deg]) }{T + 272.62} \right] ~~ (T < 0)
 
     References
     ----------
@@ -128,7 +130,7 @@ def mixing_ratio(e, p):
 
     Notes
     -----
-    計算式:
+    計算式
 
     .. math:: r = \frac{\epsilon e}{p - e}
     """
@@ -136,9 +138,37 @@ def mixing_ratio(e, p):
     return epsilon * e / (p - e)
 
 
-def dewpoint(t, rh):
+def dewpoint_from_e(e):
+    r"""
+    露点温度を水蒸気圧から計算する．
+
+    Parameters
+    ----------
+    e : array_like
+        水蒸気圧 [Pa]
+
+    Returns
+    -------
+    array_like
+        露点温度 [K]
+
+    Notes
+    -----
+    Boltonの式で `e=es` としたときの `T` が `Td` となる:
+
+    .. math:: Td = \frac{243.5 \ln(e / e_0)}{17.67 - \ln(e / e_0)} [deg]
+
+    See Also
+    --------
+    saturation_vapor_pressure, dewpoint_from_rh
     """
-    露点温度を計算する．
+    val = np.log(e / water_es_0c)
+    return 243.5 * val / (17.67 - val) + 273.15
+
+
+def dewpoint_from_rh(t, rh):
+    """
+    露点温度を湿度から計算する．
 
     Parameters
     ----------
@@ -151,8 +181,12 @@ def dewpoint(t, rh):
     -------
     array_like
         露点温度 [K]
+
+    See Also
+    --------
+    dewpoint_from_e
     """
-    return dewpoint(rh * saturation_vapor_pressure(t) / 100.)
+    return dewpoint_from_e(rh * saturation_vapor_pressure(t) / 100.)
 
 
 def dry_lapse(p, t):
@@ -207,16 +241,15 @@ def moist_lapse(p, t):
 
     References
     ----------
-
-    .. Bakhshaii, A. and R. Stull, 2013: Saturated Pseudoadiabats--A
-       Noniterative Approximation. J. Appl. Meteor. Clim., 52, 5-15.
+    Bakhshaii, A. and R. Stull, 2013: Saturated Pseudoadiabats--A Noniterative Approximation.
+    *J. Appl. Meteor. Clim.*, 52, 5-15.
     """
     def dT_dP(T, P):
         rs = mixing_ratio(saturation_vapor_pressure(T), P)
         # b  = 1. - 0.24 * rs
         b = 1
-        return b / P * (air_Rd * T + water_Lv * rs) / (air_Cp_d +
-                                                       (water_Lv * water_Lv * rs * epsilon * b) / air_Rd / T / T)
+        return b / P * (air_Rd * T + water_Lv_0c * rs) / (air_Cp_d +
+                                                          (water_Lv_0c * water_Lv_0c * rs * epsilon * b) / air_Rd / T / T)
 
     return odeint(dT_dP, np.atleast_1d(t).squeeze(), p.squeeze()).T.squeeze()
 
@@ -245,62 +278,65 @@ def lifted_condensation_level(p, t, td, max_iters=50, eps=1.e-2):
 
     Notes
     -----
-    1. Find the dew point from the LCL pressure and starting mixing ratio
+    持ち上げる気塊 `(p0, T0)` のLCLは `(p, Td0)` を通る等飽和混合比線と `(p, T)` を通る乾燥断熱線の交点として
+    求めることができる．すなわちLCLを求めることは次の連立非線形方程式を解くことに等しい．
 
+    .. math:: ws(p_0, Td_0) = ws(p, T) ~~~~(a)
 
-    一方，乾燥断熱過程での保存則から `(T_0, p_0)` と `(T_lcl, p_lcl)` は以下の関係を満たすことを利用して
+    .. math:: \theta(p_0, T_0) = \theta(p, T) ~~~~(b)
 
-    .. math:: T_lcl = T \left(\frac{p_lcl}{p}\right)^\kappa
+    これは次のようにして数値的反復法により解くことができる．
 
-    .. math:: p_lcl = p_0 * \left\frac{T_lcl}{T}\right^{1/\kappa}
-
-    から求まる．
-
-
-    3. Iterate until convergence
+    1. (a)を満たす `(p_n, T_n) = (p_0, Td_0)` を初期値とする．
+    2. `T_n` と(b)式から(b)を満たす `(p_n+1, T_n)` を求める．
+    3. `p_n+1` と(a)式から(a)を満たす `(p_n+1, T_n+1)` を求める．
+    4. これを繰り返して `(p_n, T_n)` を更新していくと値は(a),(b)の解 `(p_lcl, T_lcl)` に収束する．
     """
     max_iters = 100
-    # (p, td)を通る飽和混合比線 -> LCLにおける（飽和）混合比
+    # 初期値
+    p_n = p
+    t_n = td
+    # (p, td)を通る等飽和混合比線
     ws = mixing_ratio(saturation_vapor_pressure(td), p)
-    p_lcl = p
     while max_iters:
-        # LCLでの温度=露点温度
-        t_lcl = dewpoint(vapor_pressure(p_lcl, ws))
-        new_p = p * (t_lcl / t) ** (1. / kappa)
-        if np.abs(new_p - p_lcl).max() < eps:
+        # p_nを更新
+        p_new = p * (t_n / t) ** (1. / kappa)
+        # t_nを更新
+        t_new = dewpoint_from_e(vapor_pressure(p_new, ws))
+        # 解が収束したらループをbreak
+        if np.abs(p_new - p_n).max() < eps:
             break
-        p_i = new_p
+        # 収束しない場合は繰り返す
         max_iters -= 1
-    return new_p
+        p_n = p_new
+        t_n = t_new
+    return p_new
 
 
-def wetbulb(pressure, temperature, dewpt):
+def wetbulb(p, t, td):
     """
     湿球温度を求める．
 
     Parameters
     ----------
-    pressure : array_like
-        air pressure [Pa]
-    temperature : array_like
-        air temperature [K]
-    dewpt : array_like
-        dew point temperature [K]
+    p : array_like
+        気圧 [Pa]
+    t : array_like
+        気温 [K]
+    td : array_like
+        露点温度 [K]
 
     Returns
     -------
     array_like
-        wet-bulb temperature [K]
+        湿球温度 [K]
 
     Notes
     -----
-    This function is implemented using an iterative approach.
-    The basic algorithm is:
-    1. Calculate LCL level from a given pressure, temperature and dewpoint using iterative approach.
-    2. Calculate LCL temperature.
-    3. Calculate the temperature at a level assuming liquid saturation processes operating from the LCL point.
+    与えられた気塊についてLCLを求め，LCLを通る湿潤断熱線が気塊の気圧 `p` と交わる点の気温を湿球温度として求める．
     """
     p_lcl = lifted_condensation_level(p, t, td)
+    # T_lclは (p,T) からの温位の保存から求める
     t_lcl = t * (p_lcl / p) ** kappa
 
     return np.atleast_1d([moist_lapse(np.asarray([p_lcl, p]), t_lcl)[-1]
