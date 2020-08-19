@@ -17,7 +17,7 @@
 import numpy as np
 from scipy.integrate import odeint
 
-from constants import kappa, epsilon, water_es_0c, air_Rd, water_Lv_0c, air_Cp_d
+from . constants import kappa, epsilon, water_es_0c, air_Rd, water_Lv_0c, air_Cp_d
 
 
 def potential_temperature(p, t, base_p=1.e5):
