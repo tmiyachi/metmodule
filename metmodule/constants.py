@@ -48,7 +48,7 @@ earth_omega = 7.292e-5
 earth_gravity = 9.81
 
 air_Md = 28.97
-air_Rd = 287.
+air_Rd = 287.05
 air_Cp_d = 1004.
 air_Cv_d = 717.
 
